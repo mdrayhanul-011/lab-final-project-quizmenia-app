@@ -1,11 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'constants/app_colors.dart';
 import 'constants/app_constants.dart';
+import 'providers/quiz_provider.dart';
 import 'screens/home_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const QuizApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => QuizProvider()),
+      ],
+      child: const QuizApp(),
+    ),
+  );
 }
 
 class QuizApp extends StatelessWidget {
