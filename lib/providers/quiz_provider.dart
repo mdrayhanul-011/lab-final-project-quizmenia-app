@@ -9,8 +9,8 @@ import '../services/api_exceptions.dart';
 import '../services/opentdb_api_service.dart';
 
 /// Central state management for Quizmenia using Provider.
-/// Handles category discovery, quiz configuration, question lifecycle,
-/// single overall countdown timer, user answers, and result generation.
+/// Coordinates quiz lifecycle, single overall countdown timer across all questions,
+/// question navigation, answer tracking, time-spent calculation, and result compilation.
 class QuizProvider with ChangeNotifier {
   final OpenTdbApiService _apiService;
 
@@ -67,9 +67,9 @@ class QuizProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  /// Sets the overall countdown timer duration in minutes (e.g. 10 minutes).
+  /// Sets the single overall countdown duration in minutes (5–50 mins).
   void setDurationMinutes(int minutes) {
-    _config = _config.copyWith(durationMinutes: minutes.clamp(1, 180));
+    _config = _config.copyWith(durationMinutes: minutes.clamp(5, 50));
     notifyListeners();
   }
 
@@ -79,11 +79,13 @@ class QuizProvider with ChangeNotifier {
   }
 
   // ---------------------------------------------------------------------------
-  // Active Quiz State & Single Overall Countdown Timer
+  // Active Quiz State & Overall Countdown Timer
   // ---------------------------------------------------------------------------
   List<QuizQuestion> _questions = [];
   int _currentQuestionIndex = 0;
-  final Map<int, String> _selectedAnswers = {}; // questionIndex -> selectedAnswer
+  final Map<int, String> _selectedAnswers = {}; // questionIndex -> answer
+  final Map<int, Duration> _questionTimeMap = {}; // questionIndex -> duration spent
+  DateTime? _questionStartTime;
 
   Timer? _countdownTimer;
   int _remainingSeconds = 0;
@@ -107,20 +109,20 @@ class QuizProvider with ChangeNotifier {
   bool get isQuizCompleted => _isQuizCompleted;
   QuizResult? get result => _result;
 
-  // Single Overall Countdown Timer Getters
+  // Timer Getters
   int get remainingSeconds => _remainingSeconds;
   int get initialDurationSeconds => _initialDurationSeconds;
   bool get hasAutoSubmitted => _hasAutoSubmitted;
   bool get isTimeUp => _remainingSeconds <= 0 && _isQuizCompleted;
 
-  /// Formats remaining time as "MM:SS" (e.g. "10:00", "09:45", "00:00")
+  /// Formatted countdown clock "MM:SS" (e.g. "10:00", "09:59")
   String get formattedRemainingTime {
     final minutes = _remainingSeconds ~/ 60;
     final seconds = _remainingSeconds % 60;
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
-  /// Fraction of time remaining from 1.0 (start) down to 0.0 (time up)
+  /// Linear fraction of remaining time from 1.0 (start) down to 0.0 (time up)
   double get timerProgress {
     if (_initialDurationSeconds <= 0) return 0.0;
     return (_remainingSeconds / _initialDurationSeconds).clamp(0.0, 1.0);
@@ -187,8 +189,10 @@ class QuizProvider with ChangeNotifier {
     _isQuizCompleted = false;
     _result = null;
     _selectedAnswers.clear();
+    _questionTimeMap.clear();
     _currentQuestionIndex = 0;
     _countdownTimer?.cancel();
+    _countdownTimer = null;
     _stopwatch.reset();
     _hasAutoSubmitted = false;
     notifyListeners();
@@ -208,6 +212,7 @@ class QuizProvider with ChangeNotifier {
       _questions = fetchedQuestions;
       _isQuizActive = true;
       _stopwatch.start();
+      _questionStartTime = DateTime.now();
       _startCountdownTimer();
       _quizError = null;
       return true;
@@ -238,6 +243,7 @@ class QuizProvider with ChangeNotifier {
 
       if (_remainingSeconds <= 0) {
         timer.cancel();
+        _countdownTimer = null;
         _handleTimeUp();
       }
     });
@@ -250,6 +256,15 @@ class QuizProvider with ChangeNotifier {
     if (!_isQuizActive || _isQuizCompleted) return;
     _hasAutoSubmitted = true;
     finishQuiz();
+  }
+
+  void _recordTimeOnCurrentQuestion() {
+    if (_questionStartTime != null) {
+      final spent = DateTime.now().difference(_questionStartTime!);
+      _questionTimeMap[_currentQuestionIndex] =
+          (_questionTimeMap[_currentQuestionIndex] ?? Duration.zero) + spent;
+    }
+    _questionStartTime = DateTime.now();
   }
 
   /// Records a user's selected answer for a specific question index.
@@ -277,6 +292,7 @@ class QuizProvider with ChangeNotifier {
   /// Navigates to the next question.
   void nextQuestion() {
     if (_currentQuestionIndex < _questions.length - 1) {
+      _recordTimeOnCurrentQuestion();
       _currentQuestionIndex++;
       notifyListeners();
     }
@@ -285,6 +301,7 @@ class QuizProvider with ChangeNotifier {
   /// Navigates to the previous question.
   void previousQuestion() {
     if (_currentQuestionIndex > 0) {
+      _recordTimeOnCurrentQuestion();
       _currentQuestionIndex--;
       notifyListeners();
     }
@@ -293,19 +310,24 @@ class QuizProvider with ChangeNotifier {
   /// Jumps directly to a given question index.
   void goToQuestion(int index) {
     if (index >= 0 && index < _questions.length && index != _currentQuestionIndex) {
+      _recordTimeOnCurrentQuestion();
       _currentQuestionIndex = index;
       notifyListeners();
     }
   }
 
-  /// Completes the active quiz, aggregates metrics, and generates a QuizResult.
+  /// Completes the active quiz, stops timer, aggregates metrics, and generates a QuizResult.
   QuizResult finishQuiz() {
     _countdownTimer?.cancel();
+    _countdownTimer = null;
     _stopwatch.stop();
 
+    // Prevent duplicate result generation
     if (_isQuizCompleted && _result != null) {
       return _result!;
     }
+
+    _recordTimeOnCurrentQuestion();
 
     // Determine actual elapsed time
     final elapsed = _initialDurationSeconds > 0
@@ -319,6 +341,7 @@ class QuizProvider with ChangeNotifier {
           question: _questions[i],
           questionIndex: i,
           selectedAnswer: _selectedAnswers[i],
+          timeSpent: _questionTimeMap[i] ?? Duration.zero,
         ),
       );
     }
@@ -326,6 +349,7 @@ class QuizProvider with ChangeNotifier {
     final quizResult = QuizResult(
       userAnswers: userAnswers,
       totalDuration: elapsed,
+      selectedDuration: _config.totalDuration,
       categoryTitle: _config.category?.name ?? 'All Categories',
       difficulty: _config.difficulty ?? 'Any',
     );
@@ -341,11 +365,13 @@ class QuizProvider with ChangeNotifier {
   /// Resets active quiz state back to initial configuration screen.
   void resetQuiz() {
     _countdownTimer?.cancel();
+    _countdownTimer = null;
     _remainingSeconds = 0;
     _initialDurationSeconds = 0;
     _hasAutoSubmitted = false;
     _stopwatch.reset();
     _questions = [];
+    _questionTimeMap.clear();
     _currentQuestionIndex = 0;
     _selectedAnswers.clear();
     _isQuizActive = false;
@@ -359,6 +385,7 @@ class QuizProvider with ChangeNotifier {
   @override
   void dispose() {
     _countdownTimer?.cancel();
+    _countdownTimer = null;
     _stopwatch.stop();
     _apiService.dispose();
     super.dispose();

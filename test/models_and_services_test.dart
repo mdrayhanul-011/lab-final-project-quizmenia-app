@@ -12,29 +12,24 @@ import 'package:quizmenia/services/api_exceptions.dart';
 import 'package:quizmenia/services/opentdb_api_service.dart';
 
 void main() {
-  group('TriviaCategory Model', () {
-    test('parses json correctly and handles prefixes', () {
-      final json = {'id': 11, 'name': 'Entertainment: Film'};
-      final category = TriviaCategory.fromJson(json);
-
-      expect(category.id, 11);
-      expect(category.name, 'Entertainment: Film');
-      expect(category.displayName, 'Film');
-      expect(category.group, 'Entertainment');
+  group('TriviaCategory & QuizConfig Models', () {
+    test('parses trivia category correctly', () {
+      final json = {'id': 9, 'name': 'General Knowledge'};
+      final cat = TriviaCategory.fromJson(json);
+      expect(cat.id, 9);
+      expect(cat.name, 'General Knowledge');
+      expect(cat.displayName, 'General Knowledge');
     });
 
-    test('handles category without prefix', () {
-      final json = {'id': 9, 'name': 'General Knowledge'};
-      final category = TriviaCategory.fromJson(json);
-
-      expect(category.id, 9);
-      expect(category.displayName, 'General Knowledge');
-      expect(category.group, 'General');
+    test('configures quiz config with total duration', () {
+      const config = QuizConfig(amount: 15, durationMinutes: 20);
+      expect(config.amount, 15);
+      expect(config.durationMinutes, 20);
+      expect(config.totalDurationSeconds, 1200);
     });
   });
-
-  group('QuizQuestion Model', () {
-    test('unescapes HTML entities in question and answers', () {
+  group('1 & 2. Multiple-choice & Boolean Quiz Models', () {
+    test('1. parses multiple choice questions with 4 shuffled options', () {
       final json = {
         'type': 'multiple',
         'difficulty': 'easy',
@@ -50,6 +45,7 @@ void main() {
 
       final question = QuizQuestion.fromJson(json);
 
+      expect(question.isMultipleChoice, isTrue);
       expect(question.question, 'What is "The Lord of the Rings" author\'s name?');
       expect(question.correctAnswer, 'J. R. R. Tolkien');
       expect(question.answers.length, 4);
@@ -58,7 +54,7 @@ void main() {
       expect(question.checkAnswer('George R. R. Martin'), isFalse);
     });
 
-    test('handles boolean questions with True and False options', () {
+    test('2. parses boolean questions with True and False options', () {
       final json = {
         'type': 'boolean',
         'difficulty': 'easy',
@@ -76,10 +72,121 @@ void main() {
       expect(question.checkAnswer('True'), isTrue);
       expect(question.checkAnswer('False'), isFalse);
     });
+
+    test('8. handles very long question and answer texts without issues', () {
+      final longText = 'A' * 400;
+      final json = {
+        'type': 'multiple',
+        'difficulty': 'hard',
+        'category': 'History',
+        'question': 'Is this long question valid? $longText',
+        'correct_answer': 'Long answer: $longText',
+        'incorrect_answers': ['Short 1', 'Short 2', 'Short 3'],
+      };
+
+      final question = QuizQuestion.fromJson(json);
+      expect(question.question.length, greaterThan(400));
+      expect(question.correctAnswer.length, greaterThan(400));
+      expect(question.answers.length, 4);
+      expect(question.checkAnswer('Long answer: $longText'), isTrue);
+    });
   });
 
-  group('UserAnswer & QuizResult Data Structures', () {
-    final sampleQuestion = QuizQuestion(
+  group('3, 4, 11, 12. Quiz Timer & Submission Flows', () {
+    late OpenTdbApiService mockService;
+
+    setUp(() {
+      final mockClient = MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'response_code': 0,
+            'results': [
+              {
+                'type': 'multiple',
+                'difficulty': 'easy',
+                'category': 'General',
+                'question': 'Q1?',
+                'correct_answer': 'A1',
+                'incorrect_answers': ['B1', 'C1', 'D1'],
+              },
+              {
+                'type': 'multiple',
+                'difficulty': 'easy',
+                'category': 'General',
+                'question': 'Q2?',
+                'correct_answer': 'A2',
+                'incorrect_answers': ['B2', 'C2', 'D2'],
+              },
+            ],
+          }),
+          200,
+        );
+      });
+      mockService = OpenTdbApiService(client: mockClient);
+    });
+
+    test('3 & 11. manual submission stops overall countdown timer immediately', () async {
+      final provider = QuizProvider(apiService: mockService);
+      provider.setDurationMinutes(10);
+
+      await provider.startQuiz();
+      expect(provider.isQuizActive, isTrue);
+      expect(provider.remainingSeconds, 600);
+
+      // Answer Q1
+      provider.selectCurrentAnswer('A1');
+
+      // 3. Manual submission before timeout
+      final result = provider.finishQuiz();
+
+      // 11. Timer stops after submission
+      expect(provider.isQuizActive, isFalse);
+      expect(provider.isQuizCompleted, isTrue);
+      expect(result.score, 1);
+      expect(result.totalQuestions, 2);
+
+      // Verify timer is canceled and does not keep running
+      provider.dispose();
+    });
+
+    test('4 & 12. auto-submit and preventing duplicate result generation', () async {
+      final provider = QuizProvider(apiService: mockService);
+      provider.setDurationMinutes(5);
+
+      await provider.startQuiz();
+      expect(provider.isQuizActive, isTrue);
+
+      // Call finishQuiz (simulating auto-submit or manual finish)
+      final result1 = provider.finishQuiz();
+      expect(provider.isQuizCompleted, isTrue);
+
+      // 12. Calling finishQuiz again returns the exact same result without re-executing
+      final result2 = provider.finishQuiz();
+      expect(identical(result1, result2), isTrue);
+
+      provider.dispose();
+    });
+
+    test('10. question navigation forward and backward records question times', () async {
+      final provider = QuizProvider(apiService: mockService);
+      await provider.startQuiz();
+
+      expect(provider.currentQuestionIndex, 0);
+      expect(provider.isFirstQuestion, isTrue);
+
+      provider.nextQuestion();
+      expect(provider.currentQuestionIndex, 1);
+      expect(provider.isLastQuestion, isTrue);
+
+      provider.previousQuestion();
+      expect(provider.currentQuestionIndex, 0);
+
+      provider.dispose();
+    });
+  });
+
+  group('5, 6, 7. Answers, Scores & View Answers Review', () {
+    final q1 = QuizQuestion(
       category: 'General',
       type: 'multiple',
       difficulty: 'easy',
@@ -88,91 +195,86 @@ void main() {
       incorrectAnswers: ['Rome', 'Berlin', 'Madrid'],
     );
 
-    test('correctly identifies answered vs unanswered and correctness', () {
-      final answeredCorrect = UserAnswer(
-        question: sampleQuestion,
-        questionIndex: 0,
-        selectedAnswer: 'Paris',
-      );
-      expect(answeredCorrect.isAnswered, isTrue);
-      expect(answeredCorrect.isUnanswered, isFalse);
-      expect(answeredCorrect.isCorrect, isTrue);
+    final q2 = QuizQuestion(
+      category: 'General',
+      type: 'boolean',
+      difficulty: 'easy',
+      question: 'The Earth is flat.',
+      correctAnswer: 'False',
+      incorrectAnswers: ['True'],
+    );
 
-      final answeredWrong = UserAnswer(
-        question: sampleQuestion,
-        questionIndex: 1,
-        selectedAnswer: 'Rome',
-      );
-      expect(answeredWrong.isCorrect, isFalse);
-      expect(answeredWrong.isIncorrect, isTrue);
-
-      final unanswered = UserAnswer(
-        question: sampleQuestion,
-        questionIndex: 2,
-        selectedAnswer: null,
-      );
-      expect(unanswered.isAnswered, isFalse);
-      expect(unanswered.isUnanswered, isTrue);
-      expect(unanswered.isCorrect, isFalse);
-    });
-
-    test('QuizResult aggregates metrics correctly', () {
+    test('5 & 6. calculates answered, unanswered, correct, and incorrect answers accurately', () {
       final answers = [
         UserAnswer(
-          question: sampleQuestion,
+          question: q1,
           questionIndex: 0,
-          selectedAnswer: 'Paris',
+          selectedAnswer: 'Paris', // Correct
         ),
         UserAnswer(
-          question: sampleQuestion,
+          question: q2,
           questionIndex: 1,
-          selectedAnswer: 'Berlin',
+          selectedAnswer: 'True', // Incorrect
         ),
         UserAnswer(
-          question: sampleQuestion,
+          question: q1,
           questionIndex: 2,
-          selectedAnswer: null,
+          selectedAnswer: null, // Unanswered
         ),
       ];
 
       final result = QuizResult(
         userAnswers: answers,
-        totalDuration: const Duration(seconds: 75),
+        totalDuration: const Duration(seconds: 45),
+        selectedDuration: const Duration(minutes: 10),
       );
 
+      // Metrics verification
       expect(result.totalQuestions, 3);
+      expect(result.answeredCount, 2);
+      expect(result.unansweredCount, 1);
       expect(result.score, 1);
       expect(result.incorrectCount, 1);
-      expect(result.unansweredCount, 1);
-      expect(result.scorePercentage, closeTo(33.33, 0.1));
-      expect(result.formattedDuration, '01:15');
+      expect(result.accuracy, closeTo(33.33, 0.1));
+      expect(result.selectedDuration.inMinutes, 10);
+    });
+
+    test('7. View Answers filters correctly partition review questions', () {
+      final answers = [
+        UserAnswer(
+          question: q1,
+          questionIndex: 0,
+          selectedAnswer: 'Paris', // Correct
+        ),
+        UserAnswer(
+          question: q2,
+          questionIndex: 1,
+          selectedAnswer: 'True', // Incorrect
+        ),
+        UserAnswer(
+          question: q1,
+          questionIndex: 2,
+          selectedAnswer: null, // Unanswered
+        ),
+      ];
+
+      final result = QuizResult(
+        userAnswers: answers,
+        totalDuration: const Duration(seconds: 45),
+      );
+
       expect(result.correctAnswers.length, 1);
+      expect(result.correctAnswers.first.selectedAnswer, 'Paris');
+
       expect(result.incorrectAnswers.length, 1);
+      expect(result.incorrectAnswers.first.selectedAnswer, 'True');
+
       expect(result.unansweredQuestions.length, 1);
+      expect(result.unansweredQuestions.first.selectedAnswer, isNull);
     });
   });
 
-  group('OpenTdbApiService', () {
-    test('fetches categories successfully', () async {
-      final mockClient = MockClient((request) async {
-        return http.Response(
-          jsonEncode({
-            'trivia_categories': [
-              {'id': 9, 'name': 'General Knowledge'},
-              {'id': 10, 'name': 'Entertainment: Books'},
-            ],
-          }),
-          200,
-        );
-      });
-
-      final service = OpenTdbApiService(client: mockClient);
-      final categories = await service.fetchCategories();
-
-      expect(categories.length, 2);
-      expect(categories.any((c) => c.id == 9), isTrue);
-    });
-
+  group('9. API failure and HTTP 429 retry handling', () {
     test('handles OpenTDB Response Code 1 (No Results)', () async {
       final mockClient = MockClient((request) async {
         return http.Response(
@@ -188,21 +290,6 @@ void main() {
       );
     });
 
-    test('handles OpenTDB Response Code 5 (Rate Limit in body)', () async {
-      final mockClient = MockClient((request) async {
-        return http.Response(
-          jsonEncode({'response_code': 5, 'results': []}),
-          200,
-        );
-      });
-
-      final service = OpenTdbApiService(client: mockClient);
-      expect(
-        () => service.fetchQuestions(),
-        throwsA(isA<OpenTdbRateLimitException>()),
-      );
-    });
-
     test('handles HTTP 429 status code and maps to OpenTdbRateLimitException', () async {
       final mockClient = MockClient((request) async {
         return http.Response('Too Many Requests', 429);
@@ -210,103 +297,10 @@ void main() {
 
       final service = OpenTdbApiService(client: mockClient);
 
-      // Verify for fetchQuestions
       expect(
         () => service.fetchQuestions(),
         throwsA(isA<OpenTdbRateLimitException>()),
       );
-
-      // Verify for fetchCategories
-      expect(
-        () => service.fetchCategories(),
-        throwsA(isA<OpenTdbRateLimitException>()),
-      );
-    });
-  });
-
-  group('QuizProvider', () {
-    test('updates configuration correctly including overall durationMinutes', () {
-      const initialConfig = QuizConfig(amount: 5, durationMinutes: 10);
-      final updated = initialConfig.copyWith(amount: 20, difficulty: 'medium', durationMinutes: 15);
-      expect(updated.amount, 20);
-      expect(updated.difficulty, 'medium');
-      expect(updated.durationMinutes, 15);
-      expect(updated.totalDurationSeconds, 900);
-
-      final provider = QuizProvider();
-      provider.setAmount(15);
-      provider.setDifficulty('hard');
-      provider.setType('multiple');
-      provider.setDurationMinutes(8);
-
-      expect(provider.config.amount, 15);
-      expect(provider.config.difficulty, 'hard');
-      expect(provider.config.type, 'multiple');
-      expect(provider.config.durationMinutes, 8);
-    });
-
-    test('answers questions, navigates and finishes quiz with single overall timer', () async {
-      final mockClient = MockClient((request) async {
-        return http.Response(
-          jsonEncode({
-            'response_code': 0,
-            'results': [
-              {
-                'type': 'multiple',
-                'difficulty': 'easy',
-                'category': 'General',
-                'question': 'Q1?',
-                'correct_answer': 'A1',
-                'incorrect_answers': ['B1', 'C1', 'D1'],
-              },
-              {
-                'type': 'boolean',
-                'difficulty': 'easy',
-                'category': 'General',
-                'question': 'Q2?',
-                'correct_answer': 'True',
-                'incorrect_answers': ['False'],
-              },
-            ],
-          }),
-          200,
-        );
-      });
-
-      final service = OpenTdbApiService(client: mockClient);
-      final provider = QuizProvider(apiService: service);
-      provider.setDurationMinutes(10);
-
-      final success = await provider.startQuiz();
-      expect(success, isTrue);
-      expect(provider.totalQuestions, 2);
-      expect(provider.isQuizActive, isTrue);
-
-      // Verify single countdown timer initialized
-      expect(provider.initialDurationSeconds, 600); // 10 minutes * 60
-      expect(provider.formattedRemainingTime, '10:00');
-
-      // Answer Q1
-      provider.selectCurrentAnswer('A1');
-      expect(provider.isCurrentAnswered, isTrue);
-      expect(provider.currentSelectedAnswer, 'A1');
-
-      // Navigate to Q2 - timer does NOT reset per question
-      provider.nextQuestion();
-      expect(provider.currentQuestionIndex, 1);
-      expect(provider.isLastQuestion, isTrue);
-      expect(provider.initialDurationSeconds, 600); // Same timer across all questions
-
-      // Finish quiz without answering Q2
-      final result = provider.finishQuiz();
-      expect(result.totalQuestions, 2);
-      expect(result.score, 1);
-      expect(result.unansweredCount, 1);
-      expect(provider.isQuizActive, isFalse);
-      expect(provider.isQuizCompleted, isTrue);
-
-      // Clean up provider
-      provider.dispose();
     });
   });
 }

@@ -102,7 +102,7 @@ class _ViewAnswersScreenState extends State<ViewAnswersScreen> {
                   ? Center(
                       child: Text(
                         'No questions in this filter.',
-                        style: TextStyle(
+                        style: const TextStyle(
                           color: AppColors.textSubtitle,
                           fontWeight: FontWeight.w600,
                         ),
@@ -282,7 +282,10 @@ class _ReviewCard extends StatelessWidget {
 
           const SizedBox(height: 14),
 
-          // Display all answer options with highlights
+          // Display all answer options according to review rules:
+          // 1. If user answer is correct: show normal/correct style from Quiz Screen
+          // 2. If user answer is wrong: Correct answer = GREEN, user's wrong answer = DEEP RED
+          // 3. If unanswered: Show clearly unanswered, correct answer = GREEN
           ...question.answers.map((choice) {
             final isThisCorrectAnswer = question.checkAnswer(choice);
             final isThisUserSelected = answerItem.selectedAnswer == choice;
@@ -291,47 +294,94 @@ class _ReviewCard extends StatelessWidget {
             Color optionBorder = AppColors.optionBorder;
             Color optionTextColor = AppColors.textDark;
             Widget? statusTag;
+            IconData? trailingIcon;
+            Color? trailingColor;
 
-            if (isThisCorrectAnswer) {
-              // Correct answer is always GREEN
-              optionBg = AppColors.reviewCorrectBg;
-              optionBorder = AppColors.reviewCorrectText;
-              optionTextColor = AppColors.reviewCorrectText;
-              statusTag = Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: AppColors.reviewCorrectText,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text(
-                  'Correct Answer',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
+            if (isCorrect) {
+              // Rule 1: User's answer is correct
+              if (isThisCorrectAnswer) {
+                // Matching normal/correct style from Quiz screen
+                optionBg = AppColors.optionSelectedBackground;
+                optionBorder = AppColors.optionSelectedBorder;
+                optionTextColor = AppColors.optionSelectedText;
+                trailingIcon = Icons.check_circle_rounded;
+                trailingColor = AppColors.optionSelectedBorder;
+              } else {
+                trailingIcon = Icons.radio_button_unchecked_rounded;
+                trailingColor = AppColors.textMuted;
+              }
+            } else if (isUnanswered) {
+              // Rule 3: Question was unanswered
+              if (isThisCorrectAnswer) {
+                // Correct answer = GREEN
+                optionBg = AppColors.reviewCorrectBg;
+                optionBorder = AppColors.reviewCorrectText;
+                optionTextColor = AppColors.reviewCorrectText;
+                statusTag = Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.reviewCorrectText,
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                ),
-              );
-            } else if (isThisUserSelected) {
-              // User's wrong answer is DEEP RED
-              optionBg = AppColors.reviewWrongBg;
-              optionBorder = AppColors.reviewWrongText;
-              optionTextColor = AppColors.reviewWrongText;
-              statusTag = Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: AppColors.reviewWrongText,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text(
-                  'Your Answer',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
+                  child: const Text(
+                    'Correct Answer',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
                   ),
-                ),
-              );
+                );
+              } else {
+                trailingIcon = Icons.radio_button_unchecked_rounded;
+                trailingColor = AppColors.textMuted;
+              }
+            } else {
+              // Rule 2: User answered wrongly
+              if (isThisCorrectAnswer) {
+                // Correct answer = GREEN
+                optionBg = AppColors.reviewCorrectBg;
+                optionBorder = AppColors.reviewCorrectText;
+                optionTextColor = AppColors.reviewCorrectText;
+                statusTag = Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.reviewCorrectText,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    'Correct Answer',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
+                  ),
+                );
+              } else if (isThisUserSelected) {
+                // User's wrong selected answer = DEEP RED
+                optionBg = AppColors.reviewWrongBg;
+                optionBorder = AppColors.reviewWrongText;
+                optionTextColor = AppColors.reviewWrongText;
+                statusTag = Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.reviewWrongText,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    'Your Answer',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
+                  ),
+                );
+              } else {
+                trailingIcon = Icons.radio_button_unchecked_rounded;
+                trailingColor = AppColors.textMuted;
+              }
             }
 
             return Container(
@@ -342,7 +392,7 @@ class _ReviewCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(
                   color: optionBorder,
-                  width: (isThisCorrectAnswer || isThisUserSelected) ? 1.5 : 1.0,
+                  width: (isThisCorrectAnswer || isThisUserSelected) ? 1.6 : 1.0,
                 ),
               ),
               child: Row(
@@ -362,6 +412,9 @@ class _ReviewCard extends StatelessWidget {
                   if (statusTag != null) ...[
                     const SizedBox(width: 8),
                     statusTag,
+                  ] else if (trailingIcon != null) ...[
+                    const SizedBox(width: 8),
+                    Icon(trailingIcon, size: 20, color: trailingColor),
                   ],
                 ],
               ),
