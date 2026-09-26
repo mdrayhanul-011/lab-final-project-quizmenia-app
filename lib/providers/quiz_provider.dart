@@ -7,18 +7,26 @@ import '../models/trivia_category.dart';
 import '../models/user_answer.dart';
 import '../services/api_exceptions.dart';
 import '../services/opentdb_api_service.dart';
+import '../services/quiz_preferences_service.dart';
 
 /// Central state management for Quizmenia using Provider.
 /// Coordinates quiz lifecycle, single overall countdown timer across all questions,
-/// question navigation, answer tracking, time-spent calculation, and result compilation.
+/// question navigation, answer tracking, time-spent calculation, result compilation,
+/// and SharedPreferences persistence of user's last quiz configuration.
 class QuizProvider with ChangeNotifier {
   final OpenTdbApiService _apiService;
+  final QuizPreferencesService _prefsService;
 
-  QuizProvider({OpenTdbApiService? apiService})
-      : _apiService = apiService ?? OpenTdbApiService();
+  QuizProvider({
+    OpenTdbApiService? apiService,
+    QuizPreferencesService? prefsService,
+  })  : _apiService = apiService ?? OpenTdbApiService(),
+        _prefsService = prefsService ?? QuizPreferencesService() {
+    loadSavedConfig();
+  }
 
   // ---------------------------------------------------------------------------
-  // Categories State
+  // Categories State & Session Caching
   // ---------------------------------------------------------------------------
   List<TriviaCategory> _categories = [];
   bool _isLoadingCategories = false;
@@ -33,49 +41,76 @@ class QuizProvider with ChangeNotifier {
   // Quiz Configuration State
   // ---------------------------------------------------------------------------
   QuizConfig _config = const QuizConfig();
+  bool _hasUserModifiedConfig = false;
   QuizConfig get config => _config;
 
+  Future<void> loadSavedConfig() async {
+    try {
+      final saved = await _prefsService.loadLastConfig(availableCategories: _categories);
+      if (!_hasUserModifiedConfig) {
+        _config = saved;
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
   void setAmount(int amount) {
+    _hasUserModifiedConfig = true;
     _config = _config.copyWith(amount: amount.clamp(1, 50));
+    _saveConfigDebounced();
     notifyListeners();
   }
 
   void setCategory(TriviaCategory? category) {
+    _hasUserModifiedConfig = true;
     if (category == null) {
       _config = _config.copyWith(clearCategory: true);
     } else {
       _config = _config.copyWith(category: category);
     }
+    _saveConfigDebounced();
     notifyListeners();
   }
 
   void setDifficulty(String? difficulty) {
+    _hasUserModifiedConfig = true;
     if (difficulty == null || difficulty.isEmpty || difficulty.toLowerCase() == 'any') {
       _config = _config.copyWith(clearDifficulty: true);
     } else {
       _config = _config.copyWith(difficulty: difficulty);
     }
+    _saveConfigDebounced();
     notifyListeners();
   }
 
   void setType(String? type) {
+    _hasUserModifiedConfig = true;
     if (type == null || type.isEmpty || type.toLowerCase() == 'any') {
       _config = _config.copyWith(clearType: true);
     } else {
       _config = _config.copyWith(type: type);
     }
+    _saveConfigDebounced();
     notifyListeners();
   }
 
   /// Sets the single overall countdown duration in minutes (5–50 mins).
   void setDurationMinutes(int minutes) {
+    _hasUserModifiedConfig = true;
     _config = _config.copyWith(durationMinutes: minutes.clamp(5, 50));
+    _saveConfigDebounced();
     notifyListeners();
   }
 
   void updateConfig(QuizConfig newConfig) {
+    _hasUserModifiedConfig = true;
     _config = newConfig;
+    _saveConfigDebounced();
     notifyListeners();
+  }
+
+  void _saveConfigDebounced() {
+    unawaited(_prefsService.saveLastConfig(_config));
   }
 
   // ---------------------------------------------------------------------------
@@ -153,12 +188,14 @@ class QuizProvider with ChangeNotifier {
   Duration get elapsedTime => _stopwatch.elapsed;
 
   // ---------------------------------------------------------------------------
-  // Actions: Categories
+  // Actions: Categories (Cached during session)
   // ---------------------------------------------------------------------------
 
   /// Loads trivia categories from OpenTDB. Caches results once loaded.
   Future<void> loadCategories({bool forceRefresh = false}) async {
+    // If already loaded and not forcing refresh, reuse cached categories
     if (_categories.isNotEmpty && !forceRefresh) return;
+    if (_isLoadingCategories) return;
 
     _isLoadingCategories = true;
     _categoriesError = null;
@@ -167,6 +204,14 @@ class QuizProvider with ChangeNotifier {
     try {
       _categories = await _apiService.fetchCategories();
       _categoriesError = null;
+
+      // Re-map saved category if needed
+      if (_config.category != null) {
+        final match = _categories.where((c) => c.id == _config.category!.id);
+        if (match.isNotEmpty) {
+          _config = _config.copyWith(category: match.first);
+        }
+      }
     } on ApiException catch (e) {
       _categoriesError = e.message;
     } catch (e) {
@@ -196,6 +241,9 @@ class QuizProvider with ChangeNotifier {
     _stopwatch.reset();
     _hasAutoSubmitted = false;
     notifyListeners();
+
+    // Persist current configuration via SharedPreferences
+    unawaited(_prefsService.saveLastConfig(_config));
 
     try {
       final fetchedQuestions = await _apiService.fetchQuestions(
@@ -362,8 +410,9 @@ class QuizProvider with ChangeNotifier {
     return quizResult;
   }
 
-  /// Resets active quiz state back to initial configuration screen.
-  void resetQuiz() {
+  /// Resets active quiz session state for "Play Again".
+  /// Clears questions, answers, result, and stops old timers while preserving the user's configuration.
+  void resetQuiz({bool keepConfig = true}) {
     _countdownTimer?.cancel();
     _countdownTimer = null;
     _remainingSeconds = 0;
@@ -372,6 +421,7 @@ class QuizProvider with ChangeNotifier {
     _stopwatch.reset();
     _questions = [];
     _questionTimeMap.clear();
+    _questionStartTime = null;
     _currentQuestionIndex = 0;
     _selectedAnswers.clear();
     _isQuizActive = false;

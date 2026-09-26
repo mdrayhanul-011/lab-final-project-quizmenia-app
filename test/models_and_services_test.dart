@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:quizmenia/models/quiz_config.dart';
 import 'package:quizmenia/models/quiz_question.dart';
 import 'package:quizmenia/models/quiz_result.dart';
@@ -10,8 +11,13 @@ import 'package:quizmenia/models/user_answer.dart';
 import 'package:quizmenia/providers/quiz_provider.dart';
 import 'package:quizmenia/services/api_exceptions.dart';
 import 'package:quizmenia/services/opentdb_api_service.dart';
+import 'package:quizmenia/services/quiz_preferences_service.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   group('TriviaCategory & QuizConfig Models', () {
     test('parses trivia category correctly', () {
       final json = {'id': 9, 'name': 'General Knowledge'};
@@ -28,6 +34,7 @@ void main() {
       expect(config.totalDurationSeconds, 1200);
     });
   });
+
   group('1 & 2. Multiple-choice & Boolean Quiz Models', () {
     test('1. parses multiple choice questions with 4 shuffled options', () {
       final json = {
@@ -145,7 +152,6 @@ void main() {
       expect(result.score, 1);
       expect(result.totalQuestions, 2);
 
-      // Verify timer is canceled and does not keep running
       provider.dispose();
     });
 
@@ -156,11 +162,11 @@ void main() {
       await provider.startQuiz();
       expect(provider.isQuizActive, isTrue);
 
-      // Call finishQuiz (simulating auto-submit or manual finish)
+      // Call finishQuiz
       final result1 = provider.finishQuiz();
       expect(provider.isQuizCompleted, isTrue);
 
-      // 12. Calling finishQuiz again returns the exact same result without re-executing
+      // 12. Calling finishQuiz again returns identical result
       final result2 = provider.finishQuiz();
       expect(identical(result1, result2), isTrue);
 
@@ -180,6 +186,35 @@ void main() {
 
       provider.previousQuestion();
       expect(provider.currentQuestionIndex, 0);
+
+      provider.dispose();
+    });
+
+    test('Play Again resets quiz state completely while preserving configuration', () async {
+      final provider = QuizProvider(apiService: mockService);
+      provider.setAmount(20);
+      provider.setDurationMinutes(15);
+      provider.setDifficulty('hard');
+
+      await provider.startQuiz();
+      provider.selectCurrentAnswer('A1');
+      final result = provider.finishQuiz();
+      expect(result.score, 1);
+
+      // User taps Play Again
+      provider.resetQuiz();
+
+      // Verify quiz session state is cleared
+      expect(provider.questions, isEmpty);
+      expect(provider.selectedAnswers, isEmpty);
+      expect(provider.result, isNull);
+      expect(provider.isQuizActive, isFalse);
+      expect(provider.isQuizCompleted, isFalse);
+
+      // Verify user's last configuration was preserved
+      expect(provider.config.amount, 20);
+      expect(provider.config.durationMinutes, 15);
+      expect(provider.config.difficulty, 'hard');
 
       provider.dispose();
     });
@@ -209,17 +244,17 @@ void main() {
         UserAnswer(
           question: q1,
           questionIndex: 0,
-          selectedAnswer: 'Paris', // Correct
+          selectedAnswer: 'Paris',
         ),
         UserAnswer(
           question: q2,
           questionIndex: 1,
-          selectedAnswer: 'True', // Incorrect
+          selectedAnswer: 'True',
         ),
         UserAnswer(
           question: q1,
           questionIndex: 2,
-          selectedAnswer: null, // Unanswered
+          selectedAnswer: null,
         ),
       ];
 
@@ -229,7 +264,6 @@ void main() {
         selectedDuration: const Duration(minutes: 10),
       );
 
-      // Metrics verification
       expect(result.totalQuestions, 3);
       expect(result.answeredCount, 2);
       expect(result.unansweredCount, 1);
@@ -244,17 +278,17 @@ void main() {
         UserAnswer(
           question: q1,
           questionIndex: 0,
-          selectedAnswer: 'Paris', // Correct
+          selectedAnswer: 'Paris',
         ),
         UserAnswer(
           question: q2,
           questionIndex: 1,
-          selectedAnswer: 'True', // Incorrect
+          selectedAnswer: 'True',
         ),
         UserAnswer(
           question: q1,
           questionIndex: 2,
-          selectedAnswer: null, // Unanswered
+          selectedAnswer: null,
         ),
       ];
 
@@ -301,6 +335,62 @@ void main() {
         () => service.fetchQuestions(),
         throwsA(isA<OpenTdbRateLimitException>()),
       );
+    });
+  });
+
+  group('SharedPreferences & Category Caching', () {
+    test('persists and restores last quiz configuration', () async {
+      final prefsService = QuizPreferencesService();
+      const configToSave = QuizConfig(
+        amount: 25,
+        difficulty: 'medium',
+        type: 'multiple',
+        durationMinutes: 15,
+        category: TriviaCategory(id: 11, name: 'Entertainment: Film'),
+      );
+
+      await prefsService.saveLastConfig(configToSave);
+      final loaded = await prefsService.loadLastConfig();
+
+      expect(loaded.amount, 25);
+      expect(loaded.difficulty, 'medium');
+      expect(loaded.type, 'multiple');
+      expect(loaded.durationMinutes, 15);
+      expect(loaded.category?.id, 11);
+      expect(loaded.category?.name, 'Entertainment: Film');
+    });
+
+    test('caches categories in session and avoids duplicate fetch', () async {
+      var callCount = 0;
+      final mockClient = MockClient((request) async {
+        callCount++;
+        return http.Response(
+          jsonEncode({
+            'trivia_categories': [
+              {'id': 9, 'name': 'General Knowledge'},
+            ],
+          }),
+          200,
+        );
+      });
+
+      final api = OpenTdbApiService(client: mockClient);
+      final provider = QuizProvider(apiService: api);
+
+      // First call fetches from API
+      await provider.loadCategories();
+      expect(callCount, 1);
+      expect(provider.categories.length, 1);
+
+      // Second call reuses cached categories without making a new request
+      await provider.loadCategories();
+      expect(callCount, 1);
+
+      // Calling with forceRefresh makes a fresh request
+      await provider.loadCategories(forceRefresh: true);
+      expect(callCount, 2);
+
+      provider.dispose();
     });
   });
 }
