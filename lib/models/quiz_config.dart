@@ -6,17 +6,24 @@ class QuizConfig {
   final TriviaCategory? category;
   final String? difficulty; // 'easy', 'medium', 'hard', or null for Any
   final String? type; // 'multiple', 'boolean', or null for Any
-  final int timePerQuestionSeconds; // e.g., 15s, 30s, or 0 for unlimited
+
+  /// Overall quiz countdown timer duration in minutes (e.g. 10 minutes).
+  /// This single timer runs across all questions.
+  final int durationMinutes;
 
   const QuizConfig({
     this.amount = 10,
     this.category,
     this.difficulty,
     this.type,
-    this.timePerQuestionSeconds = 0,
+    this.durationMinutes = 10,
   });
 
-  bool get isTimed => timePerQuestionSeconds > 0;
+  /// Total duration as a [Duration] object.
+  Duration get totalDuration => Duration(minutes: durationMinutes);
+
+  /// Total duration in seconds.
+  int get totalDurationSeconds => durationMinutes * 60;
 
   QuizConfig copyWith({
     int? amount,
@@ -26,19 +33,18 @@ class QuizConfig {
     bool clearDifficulty = false,
     String? type,
     bool clearType = false,
-    int? timePerQuestionSeconds,
+    int? durationMinutes,
   }) {
     return QuizConfig(
       amount: amount ?? this.amount,
       category: clearCategory ? null : (category ?? this.category),
       difficulty: clearDifficulty ? null : (difficulty ?? this.difficulty),
       type: clearType ? null : (type ?? this.type),
-      timePerQuestionSeconds:
-          timePerQuestionSeconds ?? this.timePerQuestionSeconds,
+      durationMinutes: durationMinutes ?? this.durationMinutes,
     );
   }
 
   @override
   String toString() =>
-      'QuizConfig(amount: $amount, category: ${category?.name}, difficulty: $difficulty, type: $type)';
+      'QuizConfig(amount: $amount, category: ${category?.name}, difficulty: $difficulty, type: $type, durationMinutes: $durationMinutes)';
 }

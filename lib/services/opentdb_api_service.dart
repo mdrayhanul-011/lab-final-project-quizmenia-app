@@ -29,6 +29,9 @@ class OpenTdbApiService {
       final response = await _client.get(uri).timeout(_timeoutDuration);
 
       if (response.statusCode != 200) {
+        if (response.statusCode == 429) {
+          throw const OpenTdbRateLimitException();
+        }
         throw ApiException(
           'Failed to load categories (HTTP ${response.statusCode}).',
           response.statusCode,
@@ -90,6 +93,9 @@ class OpenTdbApiService {
       final response = await _client.get(uri).timeout(_timeoutDuration);
 
       if (response.statusCode != 200) {
+        if (response.statusCode == 429) {
+          throw const OpenTdbRateLimitException();
+        }
         throw ApiException(
           'Failed to fetch questions (HTTP ${response.statusCode}).',
           response.statusCode,

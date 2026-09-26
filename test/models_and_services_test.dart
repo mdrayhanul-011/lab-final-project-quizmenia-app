@@ -188,7 +188,7 @@ void main() {
       );
     });
 
-    test('handles OpenTDB Response Code 5 (Rate Limit)', () async {
+    test('handles OpenTDB Response Code 5 (Rate Limit in body)', () async {
       final mockClient = MockClient((request) async {
         return http.Response(
           jsonEncode({'response_code': 5, 'results': []}),
@@ -202,26 +202,50 @@ void main() {
         throwsA(isA<OpenTdbRateLimitException>()),
       );
     });
+
+    test('handles HTTP 429 status code and maps to OpenTdbRateLimitException', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response('Too Many Requests', 429);
+      });
+
+      final service = OpenTdbApiService(client: mockClient);
+
+      // Verify for fetchQuestions
+      expect(
+        () => service.fetchQuestions(),
+        throwsA(isA<OpenTdbRateLimitException>()),
+      );
+
+      // Verify for fetchCategories
+      expect(
+        () => service.fetchCategories(),
+        throwsA(isA<OpenTdbRateLimitException>()),
+      );
+    });
   });
 
   group('QuizProvider', () {
-    test('updates configuration correctly', () {
-      const initialConfig = QuizConfig(amount: 5);
-      final updated = initialConfig.copyWith(amount: 20, difficulty: 'medium');
+    test('updates configuration correctly including overall durationMinutes', () {
+      const initialConfig = QuizConfig(amount: 5, durationMinutes: 10);
+      final updated = initialConfig.copyWith(amount: 20, difficulty: 'medium', durationMinutes: 15);
       expect(updated.amount, 20);
       expect(updated.difficulty, 'medium');
+      expect(updated.durationMinutes, 15);
+      expect(updated.totalDurationSeconds, 900);
 
       final provider = QuizProvider();
       provider.setAmount(15);
       provider.setDifficulty('hard');
       provider.setType('multiple');
+      provider.setDurationMinutes(8);
 
       expect(provider.config.amount, 15);
       expect(provider.config.difficulty, 'hard');
       expect(provider.config.type, 'multiple');
+      expect(provider.config.durationMinutes, 8);
     });
 
-    test('answers questions, navigates and finishes quiz', () async {
+    test('answers questions, navigates and finishes quiz with single overall timer', () async {
       final mockClient = MockClient((request) async {
         return http.Response(
           jsonEncode({
@@ -251,21 +275,27 @@ void main() {
 
       final service = OpenTdbApiService(client: mockClient);
       final provider = QuizProvider(apiService: service);
+      provider.setDurationMinutes(10);
 
       final success = await provider.startQuiz();
       expect(success, isTrue);
       expect(provider.totalQuestions, 2);
       expect(provider.isQuizActive, isTrue);
 
+      // Verify single countdown timer initialized
+      expect(provider.initialDurationSeconds, 600); // 10 minutes * 60
+      expect(provider.formattedRemainingTime, '10:00');
+
       // Answer Q1
       provider.selectCurrentAnswer('A1');
       expect(provider.isCurrentAnswered, isTrue);
       expect(provider.currentSelectedAnswer, 'A1');
 
-      // Next
+      // Navigate to Q2 - timer does NOT reset per question
       provider.nextQuestion();
       expect(provider.currentQuestionIndex, 1);
       expect(provider.isLastQuestion, isTrue);
+      expect(provider.initialDurationSeconds, 600); // Same timer across all questions
 
       // Finish quiz without answering Q2
       final result = provider.finishQuiz();
@@ -274,6 +304,9 @@ void main() {
       expect(result.unansweredCount, 1);
       expect(provider.isQuizActive, isFalse);
       expect(provider.isQuizCompleted, isTrue);
+
+      // Clean up provider
+      provider.dispose();
     });
   });
 }
