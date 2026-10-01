@@ -142,7 +142,9 @@ class _CategoryScreenState extends State<CategoryScreen> {
       );
     }
 
-    final categories = provider.categories;
+    final categories = provider.categories
+        .where(CategoryAssetHelper.isSupportedCategory)
+        .toList();
 
     return GridView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 8.0),

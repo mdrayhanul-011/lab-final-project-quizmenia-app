@@ -21,7 +21,7 @@ class QuizConfigScreen extends StatefulWidget {
 class _QuizConfigScreenState extends State<QuizConfigScreen> {
   int _questionCount = 10;
   String _difficulty = 'Any Difficulty';
-  String _questionType = 'Multiple Choice';
+  String _questionType = 'Any Type';
   int _durationMinutes = 10;
 
   final List<String> _difficultyOptions = [
@@ -194,7 +194,7 @@ class _QuizConfigScreenState extends State<QuizConfigScreen> {
 
               const SizedBox(height: 20),
 
-              // 4. Overall Quiz Countdown Duration (5–50 minutes)
+              // 4. Overall Quiz Countdown Duration (1–50 minutes)
               _buildDurationSection(),
 
               const SizedBox(height: 32),
@@ -328,7 +328,7 @@ class _QuizConfigScreenState extends State<QuizConfigScreen> {
                       ),
                     ),
                     Text(
-                      'Overall countdown (5–50 mins)',
+                      'Overall countdown (1–50 mins)',
                       style: TextStyle(
                         fontSize: 12.5,
                         color: AppColors.textSubtitle,
@@ -359,9 +359,9 @@ class _QuizConfigScreenState extends State<QuizConfigScreen> {
           ),
           child: Slider(
             value: _durationMinutes.toDouble(),
-            min: 5,
+            min: 1,
             max: 50,
-            divisions: 9, // 5, 10, 15, 20, 25, 30, 35, 40, 45, 50
+            divisions: 49,
             onChanged: (val) {
               setState(() => _durationMinutes = val.round());
             },

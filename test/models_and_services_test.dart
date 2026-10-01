@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -12,6 +13,7 @@ import 'package:quizmenia/providers/quiz_provider.dart';
 import 'package:quizmenia/services/api_exceptions.dart';
 import 'package:quizmenia/services/opentdb_api_service.dart';
 import 'package:quizmenia/services/quiz_preferences_service.dart';
+import 'package:quizmenia/utils/category_asset_helper.dart';
 
 void main() {
   setUp(() {
@@ -389,6 +391,259 @@ void main() {
       // Calling with forceRefresh makes a fresh request
       await provider.loadCategories(forceRefresh: true);
       expect(callCount, 2);
+
+      provider.dispose();
+    });
+  });
+
+  group('Category Filtering and Image Synchronization', () {
+    const expected16Categories = [
+      'Animal',
+      'Film',
+      'Computers',
+      'Mathematics',
+      'Politics',
+      'Gadgets',
+      'Sports',
+      'Cartoons',
+      'Geography',
+      'Mythology',
+      'Art',
+      'Books',
+      'Science & Nature',
+      'Vehicles',
+      'History',
+      'General Knowledge',
+    ];
+
+    test('1. CategoryAssetHelper correctly matches and supports all 16 target categories', () {
+      for (final catName in expected16Categories) {
+        expect(
+          CategoryAssetHelper.isSupported(catName),
+          isTrue,
+          reason: 'Expected "$catName" to be supported',
+        );
+      }
+    });
+
+    test('2. CategoryAssetHelper rejects all 8 unwanted OpenTDB categories', () {
+      const unwantedCategories = [
+        'Entertainment: Music',
+        'Entertainment: Musicals & Theatres',
+        'Entertainment: Television',
+        'Entertainment: Video Games',
+        'Entertainment: Board Games',
+        'Celebrities',
+        'Entertainment: Comics',
+        'Entertainment: Japanese Anime & Manga',
+      ];
+
+      for (final unwanted in unwantedCategories) {
+        expect(
+          CategoryAssetHelper.isSupported(unwanted),
+          isFalse,
+          reason: 'Expected "$unwanted" to be rejected/unsupported',
+        );
+      }
+    });
+
+    test('3. CategoryAssetHelper maps all 16 categories to existing asset image files with exact extensions', () {
+      final categoryImageMap = {
+        'Animal': 'assets/images/cat_animals.jpg',
+        'Animals': 'assets/images/cat_animals.jpg',
+        'Entertainment: Film': 'assets/images/cat_film.jpg',
+        'Film': 'assets/images/cat_film.jpg',
+        'Science: Computers': 'assets/images/cat_computers.jpg',
+        'Computers': 'assets/images/cat_computers.jpg',
+        'Science: Mathematics': 'assets/images/cat_mathematics.jpg',
+        'Mathematics': 'assets/images/cat_mathematics.jpg',
+        'Politics': 'assets/images/cat_politics.jpg',
+        'Science: Gadgets': 'assets/images/cat_gadgets.jpg',
+        'Gadgets': 'assets/images/cat_gadgets.jpg',
+        'Sports': 'assets/images/cat_sports.jpg',
+        'Entertainment: Cartoon & Animations': 'assets/images/cat_cartoons.jpg',
+        'Cartoon & Animations': 'assets/images/cat_cartoons.jpg',
+        'Cartoons': 'assets/images/cat_cartoons.jpg',
+        'Geography': 'assets/images/cat_geography.jpg',
+        'Mythology': 'assets/images/cat_mythology.jpg',
+        'Art': 'assets/images/cat_art.png',
+        'Entertainment: Books': 'assets/images/cat_books.png',
+        'Books': 'assets/images/cat_books.png',
+        'Science & Nature': 'assets/images/cat_science.png',
+        'Vehicles': 'assets/images/cat_vehicles.png',
+        'History': 'assets/images/cat_history.png',
+        'General Knowledge': 'assets/images/cat_general_knowledge.png',
+      };
+
+      categoryImageMap.forEach((categoryName, expectedPath) {
+        final visual = CategoryAssetHelper.getVisualData(categoryName);
+        expect(visual.imagePath, expectedPath, reason: 'Image mismatch for $categoryName');
+        expect(
+          File(visual.imagePath).existsSync(),
+          isTrue,
+          reason: 'Asset file does not exist on disk: ${visual.imagePath}',
+        );
+      });
+    });
+
+    test('4. filters 24 OpenTDB categories down to exactly the 16 curated categories keeping IDs', () async {
+      final all24OpenTdbJson = {
+        'trivia_categories': [
+          {'id': 9, 'name': 'General Knowledge'},
+          {'id': 10, 'name': 'Entertainment: Books'},
+          {'id': 11, 'name': 'Entertainment: Film'},
+          {'id': 12, 'name': 'Entertainment: Music'},
+          {'id': 13, 'name': 'Entertainment: Musicals & Theatres'},
+          {'id': 14, 'name': 'Entertainment: Television'},
+          {'id': 15, 'name': 'Entertainment: Video Games'},
+          {'id': 16, 'name': 'Entertainment: Board Games'},
+          {'id': 17, 'name': 'Science & Nature'},
+          {'id': 18, 'name': 'Science: Computers'},
+          {'id': 19, 'name': 'Science: Mathematics'},
+          {'id': 20, 'name': 'Mythology'},
+          {'id': 21, 'name': 'Sports'},
+          {'id': 22, 'name': 'Geography'},
+          {'id': 23, 'name': 'History'},
+          {'id': 24, 'name': 'Politics'},
+          {'id': 25, 'name': 'Art'},
+          {'id': 26, 'name': 'Celebrities'},
+          {'id': 27, 'name': 'Animals'},
+          {'id': 28, 'name': 'Vehicles'},
+          {'id': 29, 'name': 'Entertainment: Comics'},
+          {'id': 30, 'name': 'Science: Gadgets'},
+          {'id': 31, 'name': 'Entertainment: Japanese Anime & Manga'},
+          {'id': 32, 'name': 'Entertainment: Cartoon & Animations'},
+        ]
+      };
+
+      final mockClient = MockClient((request) async {
+        if (request.url.path.contains('api_category.php')) {
+          return http.Response(jsonEncode(all24OpenTdbJson), 200);
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final api = OpenTdbApiService(client: mockClient);
+      final provider = QuizProvider(apiService: api);
+
+      await provider.loadCategories();
+
+      // Exactly 16 categories retained
+      expect(provider.categories.length, 16);
+
+      // Verify the 8 excluded categories are absent
+      final categoryNames = provider.categories.map((c) => c.name).toList();
+      expect(categoryNames.contains('Entertainment: Music'), isFalse);
+      expect(categoryNames.contains('Entertainment: Musicals & Theatres'), isFalse);
+      expect(categoryNames.contains('Entertainment: Television'), isFalse);
+      expect(categoryNames.contains('Entertainment: Video Games'), isFalse);
+      expect(categoryNames.contains('Entertainment: Board Games'), isFalse);
+      expect(categoryNames.contains('Celebrities'), isFalse);
+      expect(categoryNames.contains('Entertainment: Comics'), isFalse);
+      expect(categoryNames.contains('Entertainment: Japanese Anime & Manga'), isFalse);
+
+      // Verify category IDs are unchanged from OpenTDB
+      final categoryById = {for (var c in provider.categories) c.id: c.displayName};
+      expect(categoryById[9], 'General Knowledge');
+      expect(categoryById[10], 'Books');
+      expect(categoryById[11], 'Film');
+      expect(categoryById[17], 'Science & Nature');
+      expect(categoryById[18], 'Computers');
+      expect(categoryById[19], 'Mathematics');
+      expect(categoryById[20], 'Mythology');
+      expect(categoryById[21], 'Sports');
+      expect(categoryById[22], 'Geography');
+      expect(categoryById[23], 'History');
+      expect(categoryById[24], 'Politics');
+      expect(categoryById[25], 'Art');
+      expect(categoryById[27], 'Animals');
+      expect(categoryById[28], 'Vehicles');
+      expect(categoryById[30], 'Gadgets');
+      expect(categoryById[32], 'Cartoon & Animations');
+
+      provider.dispose();
+    });
+
+    test('5. category -> configuration -> quiz flow passes category ID to OpenTDB question request', () async {
+      int? requestedCategoryId;
+      int? requestedAmount;
+      String? requestedDifficulty;
+
+      final mockClient = MockClient((request) async {
+        if (request.url.path.contains('api_category.php')) {
+          return http.Response(
+            jsonEncode({
+              'trivia_categories': [
+                {'id': 27, 'name': 'Animals'},
+              ],
+            }),
+            200,
+          );
+        }
+        if (request.url.path.contains('api.php')) {
+          requestedCategoryId = int.tryParse(request.url.queryParameters['category'] ?? '');
+          requestedAmount = int.tryParse(request.url.queryParameters['amount'] ?? '');
+          requestedDifficulty = request.url.queryParameters['difficulty'];
+
+          return http.Response(
+            jsonEncode({
+              'response_code': 0,
+              'results': [
+                {
+                  'type': 'multiple',
+                  'difficulty': 'easy',
+                  'category': 'Animals',
+                  'question': 'What is the fastest land animal?',
+                  'correct_answer': 'Cheetah',
+                  'incorrect_answers': ['Lion', 'Gazelle', 'Leopard'],
+                },
+              ],
+            }),
+            200,
+          );
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final api = OpenTdbApiService(client: mockClient);
+      final provider = QuizProvider(apiService: api);
+
+      await provider.loadCategories();
+      expect(provider.categories.length, 1);
+      final selectedCategory = provider.categories.first;
+      expect(selectedCategory.id, 27);
+
+      // Select category
+      provider.setCategory(selectedCategory);
+      provider.setAmount(10);
+      provider.setDifficulty('easy');
+
+      // Start quiz
+      final success = await provider.startQuiz();
+      expect(success, isTrue);
+      expect(provider.isQuizActive, isTrue);
+      expect(provider.questions.length, 1);
+      expect(requestedCategoryId, 27);
+      expect(requestedAmount, 10);
+      expect(requestedDifficulty, 'easy');
+
+      provider.dispose();
+    });
+
+    test('6. setDurationMinutes clamps duration between 1 and 50 minutes', () {
+      final provider = QuizProvider();
+      provider.setDurationMinutes(1);
+      expect(provider.config.durationMinutes, 1);
+      expect(provider.config.totalDurationSeconds, 60);
+
+      provider.setDurationMinutes(0);
+      expect(provider.config.durationMinutes, 1);
+
+      provider.setDurationMinutes(50);
+      expect(provider.config.durationMinutes, 50);
+
+      provider.setDurationMinutes(60);
+      expect(provider.config.durationMinutes, 50);
 
       provider.dispose();
     });

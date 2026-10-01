@@ -8,6 +8,7 @@ import '../models/user_answer.dart';
 import '../services/api_exceptions.dart';
 import '../services/opentdb_api_service.dart';
 import '../services/quiz_preferences_service.dart';
+import '../utils/category_asset_helper.dart';
 
 /// Central state management for Quizmenia using Provider.
 /// Coordinates quiz lifecycle, single overall countdown timer across all questions,
@@ -94,10 +95,10 @@ class QuizProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  /// Sets the single overall countdown duration in minutes (5–50 mins).
+  /// Sets the single overall countdown duration in minutes (1–50 mins).
   void setDurationMinutes(int minutes) {
     _hasUserModifiedConfig = true;
-    _config = _config.copyWith(durationMinutes: minutes.clamp(5, 50));
+    _config = _config.copyWith(durationMinutes: minutes.clamp(1, 50));
     _saveConfigDebounced();
     notifyListeners();
   }
@@ -202,7 +203,10 @@ class QuizProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      _categories = await _apiService.fetchCategories();
+      final fetchedCategories = await _apiService.fetchCategories();
+      _categories = fetchedCategories
+          .where(CategoryAssetHelper.isSupportedCategory)
+          .toList();
       _categoriesError = null;
 
       // Re-map saved category if needed

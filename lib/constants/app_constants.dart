@@ -1,6 +1,6 @@
 class AppConstants {
   static const String appName = 'Quizzical';
-  static const String appSubtitle = 'Your_Name';
+  static const String appSubtitle = 'Rony';
   static const String chooseCategory = 'choose a category to focus on:';
   static const String configuration = 'Configuration';
   static const String getStarted = 'GET STARTED  →';
